@@ -26,7 +26,7 @@ export function activate(context: vscode.ExtensionContext) {
 			try {
 				await vscode.commands.executeCommand(
 					"workbench.action.openSettings",
-					"@ext:nvidia.nvidia-vscode-copilot",
+					"@ext:MartinAlejandroOviedo.nvidia-vscode-copilot",
 				);
 			} catch {
 				await vscode.commands.executeCommand("workbench.action.openSettings");

@@ -3,13 +3,13 @@
 	"displayName": "NVIDIA Models for VS Code",
 	"description": "NVIDIA models provider for VS Code Chat",
 	"version": "0.1.0",
-	"publisher": "nvidia",
+	"publisher": "MartinAlejandroOviedo",
 	"engines": {
 		"vscode": "^1.93.0"
 	},
 	"icon": "media/icon.png",
 	"repository": {
-		"url": "https://github.com/NVIDIA/vscode-nvidia-copilot"
+		"url": "https://github.com/MartinAlejandroOviedo/nvidia-vscode-copilot"
 	},
 	"license": "MIT",
 	"activationEvents": [

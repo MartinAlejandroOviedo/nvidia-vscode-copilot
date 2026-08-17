@@ -858,7 +858,7 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 			apiKey,
 			baseURL: OPENROUTER_API_BASE,
 			defaultHeaders: {
-				"HTTP-Referer": "https://github.com/NVIDIA/vscode-nvidia-copilot",
+				"HTTP-Referer": "https://github.com/MartinAlejandroOviedo/nvidia-vscode-copilot",
 				"X-Title": "NVIDIA VS Code Extension",
 			},
 		});
