@@ -1,0 +1,14 @@
+.vscode/**
+.vscode-test/**
+src/**
+node_modules/**
+**/*.ts
+**/tsconfig.json
+**/vite.config.ts
+**/*.mjs
+media/nvidia-icon.svg
+.gitignore
+.git/**
+build/**
+releases/**
+release/**

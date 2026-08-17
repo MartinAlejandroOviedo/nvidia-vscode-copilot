@@ -1,0 +1,112 @@
+{
+	"name": "nvidia-vscode-copilot",
+	"displayName": "NVIDIA Models for VS Code",
+	"description": "NVIDIA models provider for VS Code Chat",
+	"version": "0.1.0",
+	"publisher": "nvidia",
+	"engines": {
+		"vscode": "^1.93.0"
+	},
+	"icon": "media/icon.png",
+	"repository": {
+		"url": "https://github.com/NVIDIA/vscode-nvidia-copilot"
+	},
+	"license": "MIT",
+	"activationEvents": [
+		"onLanguageModelChat:nvidia.nvidia",
+		"onCommand:nvidia.setOutputDirectory",
+		"onCommand:nvidia.openSettings"
+	],
+	"categories": [
+		"AI",
+		"Chat"
+	],
+	"type": "module",
+	"main": "./dist/extension.js",
+	"contributes": {
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "nvidia-chat",
+					"title": "NVIDIA Chat",
+					"icon": "media/activity-icon.png"
+				}
+			]
+		},
+		"views": {
+			"nvidia-chat": [
+				{
+					"type": "webview",
+					"id": "nvidia.welcome",
+					"name": "NVIDIA Chat"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "nvidia.setOutputDirectory",
+				"title": "NVIDIA: Configurar carpeta de salida"
+			},
+			{
+				"command": "nvidia.openSettings",
+				"title": "NVIDIA: Abrir Configuración"
+			}
+		],
+		"configuration": {
+			"title": "NVIDIA",
+			"properties": {
+				"nvidia.apiKey": {
+					"type": "string",
+					"default": "",
+					"description": "NVIDIA API key. Almacenada en la configuración global para que persista entre instalaciones."
+				},
+				"nvidia.openrouterApiKey": {
+					"type": "string",
+					"default": "",
+					"description": "OpenRouter API key. Almacenada en la configuración global para que persista entre instalaciones."
+				},
+				"nvidia.outputDirectory": {
+					"type": "string",
+					"default": "",
+					"description": "Carpeta donde el modelo debe crear o escribir los archivos. Si está vacía, se usa la carpeta raíz del workspace abierto."
+				},
+				"nvidia.systemPrompt": {
+					"type": "string",
+					"default": "",
+					"description": "Reemplaza el prompt de sistema por defecto. Si se define, sustituye el primer mensaje de sistema enviado al modelo. Déjalo vacío para usar el prompt por defecto."
+				}
+			}
+		},
+		"languageModelChatProviders": [
+			{
+				"displayName": "NVIDIA Vscode Extension",
+				"vendor": "nvidia.nvidia"
+			}
+		]
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run package",
+		"compile": "vite build",
+		"watch": "vite build --watch",
+		"package": "vite build --minify",
+		"vsce-package": "npx vsce package --no-dependencies",
+		"vsce-publish": "npx vsce publish --no-dependencies",
+		"check-types": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.8",
+		"@types/markdown-it": "^14.1.2",
+		"@types/node": "26.x",
+		"@types/vscode": "^1.93.0",
+		"@vscode/vsce": "^3.7.1",
+		"typescript": "^7.0.2",
+		"vite": "^8.2.1"
+	},
+	"dependencies": {
+		"markdown-it": "^15.0.0",
+		"markdown-it-anchor": "^9.2.1",
+		"markdown-it-footnote": "^4.0.0",
+		"markdown-it-task-lists": "^2.1.1",
+		"openai": "^7.4.0"
+	}
+}
