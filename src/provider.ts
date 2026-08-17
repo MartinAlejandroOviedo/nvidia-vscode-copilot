@@ -601,11 +601,11 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 	 * instead of the native tool-calling protocol. Parse that text so we can
 	 * still execute the requested tool.
 	 */
-	/** True if the accumulated text could be the start of a text-mode tool call. */
+	/** True if the accumulated text could be a text-mode tool call. */
 	private looksLikeToolCall(s: string): boolean {
-		if (!s.startsWith("<")) return false;
-		const prefixes = ["<tool_call", "<function", "<tool"];
-		return prefixes.some((p) => p.startsWith(s) || s.startsWith(p));
+		if (/<(tool_call|function\s*=|tool\b)/i.test(s)) return true;
+		const head = s.trimStart();
+		return ["<tool_call", "<function", "<tool"].some((p) => p.startsWith(head));
 	}
 
 	private parseTextToolCall(
@@ -1002,25 +1002,112 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 		const controller = new AbortController();
 		token.onCancellationRequested(() => controller.abort());
 
-		const stream = await openai.chat.completions.create(
+		const convo: any[] = [...messages];
+
+		for (let iter = 0; iter < MAX_AGENT_ITERATIONS; iter++) {
+			const stream = await openai.chat.completions.create(
+				{
+					model: modelId,
+					messages: convo,
+					stream: true,
+					tools: this.agentTools as any,
+					tool_choice: "auto",
+				} as any,
+				{ signal: controller.signal }
+			);
+
+			let content = "";
+			const toolCalls = new Map<number, ToolCallAccum>();
+			const iterable = stream as unknown as AsyncIterable<any>;
+			for await (const chunk of iterable) {
+				const delta: any = chunk.choices?.[0]?.delta;
+				if (!delta) continue;
+				if (delta.content) content += delta.content;
+				if (delta.tool_calls) {
+					for (const tc of delta.tool_calls) {
+						const idx = tc.index ?? 0;
+						const acc = toolCalls.get(idx) ?? { id: "", name: "", args: "" };
+						if (tc.id) acc.id = tc.id;
+						if (tc.function?.name) acc.name = tc.function.name;
+						if (tc.function?.arguments) acc.args += tc.function.arguments;
+						toolCalls.set(idx, acc);
+					}
+				}
+			}
+
+			if (toolCalls.size > 0) {
+				convo.push({
+					role: "assistant",
+					content: content || null,
+					tool_calls: [...toolCalls.values()].map((tc) => ({
+						id: tc.id,
+						type: "function",
+						function: { name: tc.name, arguments: tc.args },
+					})),
+				});
+				for (const tc of toolCalls.values()) {
+					const result = await this.executeTool(tc.name, tc.args);
+					convo.push({
+						role: "tool",
+						tool_call_id: tc.id,
+						content: result,
+					});
+				}
+				continue;
+			}
+
+			// Fallback: model may have emitted the tool call as plain text.
+			const textTool = this.parseTextToolCall(content);
+			if (textTool && this.isKnownTool(textTool.name)) {
+				const result = await this.executeTool(
+					textTool.name,
+					JSON.stringify(textTool.args),
+				);
+				convo.push({
+					role: "assistant",
+					content: null,
+					tool_calls: [
+						{
+							id: "text-tool-" + iter,
+							type: "function",
+							function: {
+								name: textTool.name,
+								arguments: JSON.stringify(textTool.args),
+							},
+						},
+					],
+				});
+				convo.push({
+					role: "tool",
+					tool_call_id: "text-tool-" + iter,
+					content: result,
+				});
+				continue;
+			}
+
+			if (content) {
+				progress.report(new vscode.LanguageModelTextPart(content));
+			}
+			return;
+		}
+
+		// Reached the iteration limit: force a final answer without tools.
+		const finalStream = await openai.chat.completions.create(
 			{
 				model: modelId,
-				messages: messages as any,
+				messages: convo,
 				stream: true,
-				tools: this.agentTools as any,
-				tool_choice: "auto",
 			} as any,
 			{ signal: controller.signal }
 		);
-
-const iterable = stream as unknown as AsyncIterable<any>;
-		for await (const chunk of iterable) {
-			for (const choice of chunk.choices ?? []) {
-				const delta = choice.delta;
-				if (delta.content) {
-					progress.report(new vscode.LanguageModelTextPart(delta.content));
-				}
-			}
+		let finalContent = "";
+		const finalIterable = finalStream as unknown as AsyncIterable<any>;
+		for await (const chunk of finalIterable) {
+			const delta = chunk.choices?.[0]?.delta;
+			if (delta?.content) finalContent += delta.content;
+		}
+		if (finalContent) {
+			progress.report(new vscode.LanguageModelTextPart(finalContent));
 		}
 	}
 
