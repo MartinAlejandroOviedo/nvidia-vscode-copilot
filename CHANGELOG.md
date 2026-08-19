@@ -4,6 +4,54 @@ Todos los cambios notables de esta extensión se documentan en este archivo.
 
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el versionado sigue [SemVer](https://semver.org/lang/es/).
 
+## [1.0.2] - 2026-08-18
+
+### Añadido
+- Proveedor DeepSeek (`deepseek-chat` y `deepseek-reasoner`) con múltiples API keys y rotación automática.
+- Sección de donaciones con PayPal y Buy Me a Coffee, y animación de donación.
+- Ocultado del razonamiento `<think>...</think>` de los modelos de razonamiento (DeepSeek-R1 y similares).
+- Listado de la estructura del proyecto en el prompt de sistema.
+
+### Mejorado
+- Filtrado de modelos para mostrar solo los que soportan *function calling* (asistente de código real).
+- Manejo de errores de rate limit (429) y de contexto demasiado largo, con mensajes claros.
+- Tablas responsive con scroll horizontal y envoltorio propio.
+
+### Eliminado
+- Proveedor Cloudflare Workers AI (soporte de *function calling* inconsistente).
+
+## [1.0.1] - 2026-08-17
+
+### Añadido
+- Botón de copiar en cada bloque de código.
+- Icono de la Activity Bar en SVG monocolor (24x24, temático).
+- IDs en todos los elementos de la interfaz web para controlarlos individualmente.
+- Soporte de múltiples API keys de NVIDIA (`nvidia.apiKeys`) con rotación automática.
+- Consola de depuración (`nvidia.debugLevel`) y botón en el panel.
+- Indicador de versión en el encabezado.
+
+### Mejorado
+- Bloques de código con fondo Dracula y borde degradado (azul → celeste → violeta).
+- Renderizado Markdown: espaciado compacto de párrafos, listas y encabezados.
+- Tablas responsivas con scroll horizontal.
+- Manejo de una sola petición a la vez (abort de la petición anterior).
+
+### Corregido
+- Etiquetas sueltas (`<tool_call>`, `<function>`, `<parameter>`) en respuestas de modelos que emiten herramientas como texto.
+
+## [0.2.0] - 2026-08-16
+
+### Añadido
+- Soporte de múltiples API keys de NVIDIA (`nvidia.apiKeys`) con rotación automática cuando una falla o se queda sin tokens.
+- Consola de depuración (`NVIDIA: Abrir consola de depuración`) con niveles de log configurables (`nvidia.debugLevel`).
+- Botón de consola de depuración en el panel.
+- Indicador de versión en el encabezado del panel.
+
+### Corregido
+- Evitar que se muestren etiquetas sueltas (`<tool_call>`, `<function>`, `<parameter>`) en las respuestas de modelos que emiten herramientas como texto.
+- Manejo de tool calls en el chat nativo de VS Code.
+- Estilos del panel (bordes más finos, mejor uso del ancho).
+
 ## [0.1.0] - 2026-08-16
 
 ### Añadido

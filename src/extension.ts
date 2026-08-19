@@ -3,7 +3,8 @@ import { NvidiaProvider } from "./provider.js";
 import { NvidiaViewProvider } from "./view.js";
 
 export function activate(context: vscode.ExtensionContext) {
-	const provider = new NvidiaProvider(context.secrets);
+	const output = vscode.window.createOutputChannel("NVIDIA Chat Debug");
+	const provider = new NvidiaProvider(context.secrets, output);
 
 	// Register the language model chat provider so NVIDIA models appear
 	// in the VS Code Chat model picker.
@@ -53,18 +54,18 @@ export function activate(context: vscode.ExtensionContext) {
 				);
 			}
 		}),
+		vscode.commands.registerCommand("nvidia.openDebugConsole", async () => {
+			output.show(true);
+		}),
 	);
 
-	// Sidebar view (icon in the right activity bar) with a full chat UI.
+	// Sidebar view (icon in the activity bar) with a full chat UI.
+	const version = context.extension.packageJSON.version ?? "0.0.0";
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(
 			NvidiaViewProvider.viewType,
-			new NvidiaViewProvider(provider, context.workspaceState),
+			new NvidiaViewProvider(provider, context.workspaceState, version, context.extensionUri),
 		),
-	);
-
-	vscode.window.showInformationMessage(
-		"NVIDIA Models extension activated.",
 	);
 }
 

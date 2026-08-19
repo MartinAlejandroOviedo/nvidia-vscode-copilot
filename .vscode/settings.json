@@ -1,8 +1,0 @@
-{
-	" python.defaultInterpreter": ".venv\\Scripts\\python.exe",
-	"python.testing.pytestArgs": [
-		"tests"
-	],
-	"python.testing.unittestEnabled": false,
-	"nvidia.systemPrompt": "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"
-}

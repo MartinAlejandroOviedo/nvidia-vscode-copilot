@@ -35,6 +35,8 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 	private _view?: vscode.WebviewView;
 	private readonly provider: NvidiaProvider;
 	private readonly workspaceState: vscode.Memento;
+	private readonly version: string;
+	private readonly extensionUri: vscode.Uri;
 	private readonly chatsKey = "nvidia.chats";
 	private readonly activeChatKey = "nvidia.activeChatId";
 	private readonly providerKey = "nvidia.provider";
@@ -44,14 +46,21 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 	private readonly runCommandKey = "nvidia.runCommand";
 	private readonly downloadFileKey = "nvidia.downloadFile";
 	private readonly gitPermKey = "nvidia.gitPerm";
+	private readonly nvidiaEnabledKey = "nvidia.nvidiaEnabled";
+	private readonly openrouterEnabledKey = "nvidia.openrouterEnabled";
+	private readonly deepseekEnabledKey = "nvidia.deepseekEnabled";
 	private abortController?: AbortController;
 
 	constructor(
 		provider: NvidiaProvider,
 		workspaceState: vscode.Memento,
+		version?: string,
+		extensionUri?: vscode.Uri,
 	) {
 		this.provider = provider;
 		this.workspaceState = workspaceState;
+		this.version = version ?? "0.0.0";
+		this.extensionUri = extensionUri ?? vscode.Uri.file("");
 	}
 
 	private getChats(): ChatSession[] {
@@ -136,7 +145,11 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			enableScripts: true,
 		};
 
-		webviewView.webview.html = this.getHtml();
+		const donationGifUri = webviewView.webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, "media", "donation.gif"),
+		);
+
+		webviewView.webview.html = this.getHtml(donationGifUri);
 
 		webviewView.webview.onDidReceiveMessage(async (message) => {
 			switch (message.command) {
@@ -182,6 +195,18 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 						this.gitPermKey,
 						false,
 					);
+					const savedNvidiaEnabled = this.workspaceState.get<boolean>(
+						this.nvidiaEnabledKey,
+						true,
+					);
+					const savedOpenrouterEnabled = this.workspaceState.get<boolean>(
+						this.openrouterEnabledKey,
+						true,
+					);
+					const savedDeepseekEnabled = this.workspaceState.get<boolean>(
+						this.deepseekEnabledKey,
+						true,
+					);
 					this.provider.setAutoApprove(savedAuto);
 					this.provider.setWebSearchEnabled(savedWeb);
 					this.provider.setPermission("runCommand", savedRunCommand);
@@ -200,6 +225,9 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 							runCommand: savedRunCommand,
 							downloadFile: savedDownloadFile,
 							git: savedGitPerm,
+							nvidiaEnabled: savedNvidiaEnabled,
+							openrouterEnabled: savedOpenrouterEnabled,
+							deepseekEnabled: savedDeepseekEnabled,
 						},
 					});
 					break;
@@ -265,6 +293,13 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 					await vscode.env.clipboard.writeText(String(message.text ?? ""));
 					break;
 				}
+				case "openExternal": {
+					const url = String(message.url ?? "");
+					if (url) {
+						await vscode.env.openExternal(vscode.Uri.parse(url));
+					}
+					break;
+				}
 				case "getContext": {
 					const editor = vscode.window.activeTextEditor;
 					if (!editor) {
@@ -315,6 +350,10 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 					await vscode.commands.executeCommand("nvidia.openSettings");
 					break;
 				}
+				case "openDebugConsole": {
+					await vscode.commands.executeCommand("nvidia.openDebugConsole");
+					break;
+				}
 				case "getOutputDir": {
 					this._view?.webview.postMessage({
 						command: "outputDir",
@@ -360,6 +399,18 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 					await this.workspaceState.update(this.gitPermKey, v);
 					break;
 				}
+				case "setProviderEnabled": {
+					const v = Boolean(message.value);
+					const prov = String(message.provider);
+					if (prov === "nvidia") {
+						await this.workspaceState.update(this.nvidiaEnabledKey, v);
+					} else if (prov === "openrouter") {
+						await this.workspaceState.update(this.openrouterEnabledKey, v);
+					} else if (prov === "deepseek") {
+						await this.workspaceState.update(this.deepseekEnabledKey, v);
+					}
+					break;
+				}
 				case "setProvider": {
 					await this.workspaceState.update(
 						this.providerKey,
@@ -377,7 +428,9 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 						const models =
 							providerName === "openrouter"
 								? await this.provider.getOpenRouterFreeModels()
-								: await this.provider.getNemotronModels();
+								: providerName === "deepseek"
+									? this.provider.getDeepSeekModels()
+									: await this.provider.getNemotronModels();
 						this._view?.webview.postMessage({
 							command: "models",
 							models,
@@ -396,6 +449,8 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 					const providerName: string = message.provider ?? "nvidia";
 					const chatId: string = message.chatId;
 
+					// Cancel any in-flight request so we never run two at once.
+					this.abortController?.abort();
 					this.abortController = new AbortController();
 					const signal = this.abortController.signal;
 
@@ -416,7 +471,9 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 						const gen =
 							providerName === "openrouter"
 								? this.provider.streamOpenRouterChat(history, model, signal, onTool, onReasoning)
-								: this.provider.streamChat(history, model, signal, onTool, onReasoning);
+								: providerName === "deepseek"
+									? this.provider.streamDeepSeekChat(history, model, signal, onTool, onReasoning)
+									: this.provider.streamChat(history, model, signal, onTool, onReasoning);
 						for await (const chunk of gen) {
 							fullText += chunk;
 							webviewView.webview.postMessage({
@@ -453,7 +510,7 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
-	private getHtml(): string {
+	private getHtml(donationGifUri: vscode.Uri): string {
 		return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -500,6 +557,19 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			color: var(--cy-cyan);
 			opacity: 0.7;
 			text-shadow: 0 0 6px var(--cy-cyan);
+		}
+		#version-badge {
+			display: inline-block;
+			margin-left: 6px;
+			padding: 1px 5px;
+			border: 1px solid rgba(0,229,255,0.25);
+			border-radius: 8px;
+			font-size: 9px;
+			letter-spacing: 0;
+			text-transform: none;
+			color: var(--cy-green);
+			opacity: 0.75;
+			vertical-align: middle;
 		}
 		#header-right { display: flex; gap: 4px; }
 		.hbtn {
@@ -558,6 +628,19 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			opacity: 0.7;
 		}
 		#prov-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+		#prov-switches { margin-bottom: 8px; }
+		.prov-switch-row {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			padding: 5px 8px;
+			border: 1px solid rgba(0,229,255,0.2);
+			border-radius: 6px;
+			font-size: 11px;
+			color: var(--cy-cyan);
+			margin-bottom: 4px;
+		}
+		.prov-switch-row .switch-label { flex: 1; }
 		.prov-btn {
 			flex: 1;
 			padding: 5px;
@@ -667,6 +750,71 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			transition: all 0.2s ease;
 		}
 		#setDirBtn:hover { background: rgba(0,255,156,0.12); box-shadow: 0 0 8px rgba(0,255,156,0.5); }
+		#donate-anim {
+			display: block;
+			width: 120px;
+			height: 120px;
+			margin: 0 auto 6px;
+			object-fit: contain;
+			border-radius: 12px;
+		}
+		.donate-text {
+			font-size: 11.5px;
+			color: #d8d8f0;
+			text-align: center;
+			margin: 0 0 8px 0;
+		}
+		.donate-row {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			padding: 6px 8px;
+			border: 1px solid rgba(0,229,255,0.25);
+			border-radius: 6px;
+			color: var(--cy-cyan);
+			font-size: 11.5px;
+			margin-bottom: 8px;
+		}
+		.donate-row .ico { display: flex; flex-shrink: 0; }
+		#paypal-email { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.donate-actions { display: flex; gap: 6px; }
+		.donate-actions button {
+			flex: 1;
+			padding: 7px;
+			border-radius: 6px;
+			cursor: pointer;
+			font-family: inherit;
+			font-size: 11.5px;
+			transition: all 0.2s ease;
+		}
+		#donateCopyBtn {
+			background: transparent;
+			border: 1px solid rgba(0,229,255,0.4);
+			color: var(--cy-cyan);
+		}
+		#donateCopyBtn:hover { background: rgba(0,229,255,0.12); box-shadow: 0 0 8px rgba(0,229,255,0.4); }
+		#donateOpenBtn {
+			background: linear-gradient(120deg, #ffd600, #ff9e00);
+			border: none;
+			color: #1a1a1a;
+			font-weight: 600;
+		}
+		#donateOpenBtn:hover { box-shadow: 0 0 10px rgba(255,214,0,0.6); transform: scale(1.02); }
+		#bmcBtn {
+			width: 100%;
+			margin-top: 8px;
+			padding: 8px;
+			border-radius: 8px;
+			cursor: pointer;
+			font-family: inherit;
+			font-size: 12px;
+			font-weight: 600;
+			background: #FFDD00;
+			color: #000000;
+			border: none;
+			transition: all 0.2s ease;
+		}
+		#bmcBtn:hover { box-shadow: 0 0 10px rgba(255,221,0,0.7); transform: scale(1.02); }
 
 		/* ---------- Drawer (chats) ---------- */
 		#drawer {
@@ -818,30 +966,138 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			background: var(--cy-bubble);
 			border-radius: 9px;
 			padding: 8px 11px;
-			white-space: pre-wrap;
 			word-wrap: break-word;
+			overflow-wrap: anywhere;
 			font-size: 12.5px;
 			line-height: 1.45;
 		}
-		.msg-row.user .msg-inner { background: #1c1030; }
+		.msg-row.user .msg-inner { background: #1c1030; white-space: pre-wrap; }
+		.msg-inner p { margin: 0 0 6px 0; }
+		.msg-inner p:last-child { margin-bottom: 0; }
+		.msg-inner a {
+			color: var(--cy-cyan);
+			text-decoration: none;
+			border-bottom: 1px solid rgba(0,229,255,0.35);
+			transition: color 0.15s ease, border-color 0.15s ease;
+		}
+		.msg-inner a:hover {
+			color: #ffffff;
+			border-bottom-color: var(--cy-cyan);
+			text-shadow: 0 0 6px rgba(0,229,255,0.5);
+		}
+		.msg-inner strong, .msg-inner b { color: #ffffff; font-weight: 600; }
+		.msg-inner em, .msg-inner i { color: rgba(216,216,240,0.92); }
+		.msg-inner del, .msg-inner s, .msg-inner strike { opacity: 0.55; }
+		.msg-inner ul, .msg-inner ol { margin: 0 0 6px 0; padding-left: 20px; }
+		.msg-inner li { margin: 2px 0; }
+		.msg-inner ul li::marker { color: var(--cy-cyan); }
+		.msg-inner ol li::marker { color: var(--cy-magenta); }
+		.msg-inner h1, .msg-inner h2, .msg-inner h3, .msg-inner h4, .msg-inner h5, .msg-inner h6 {
+			margin: 12px 0 5px 0;
+			line-height: 1.3;
+			font-weight: 600;
+			color: #ffffff;
+		}
+		.msg-inner h1 { font-size: 18px; }
+		.msg-inner h2 { font-size: 16px; }
+		.msg-inner h3 { font-size: 14px; }
+		.msg-inner h4 { font-size: 13px; }
+		.msg-inner h5 { font-size: 12.5px; }
+		.msg-inner h6 { font-size: 12px; opacity: 0.85; }
+		.msg-inner h1, .msg-inner h2 {
+			padding-bottom: 3px;
+			border-bottom: 1px solid rgba(0,229,255,0.15);
+		}
+		.msg-inner blockquote {
+			margin: 6px 0;
+			padding: 4px 12px;
+			border-left: 3px solid var(--cy-cyan);
+			background: rgba(0,229,255,0.04);
+			border-radius: 0 6px 6px 0;
+			color: rgba(216,216,240,0.85);
+		}
+		.msg-inner blockquote p { margin-bottom: 2px; }
+		.msg-inner hr { margin: 10px 0; border: none; border-top: 1px solid rgba(0,229,255,0.2); }
 		.msg-inner code {
-			background: rgba(0,0,0,0.4);
+			background: #44475a;
 			padding: 2px 5px;
 			border-radius: 4px;
 			font-family: var(--vscode-editor-font-family, monospace);
 			font-size: 11.5px;
-			color: var(--cy-green);
+			color: #8be9fd;
 		}
 		.msg-inner pre {
-			background: rgba(0,0,0,0.4);
-			padding: 8px;
-			border-radius: 6px;
+			background:
+				linear-gradient(#282a36, #282a36) padding-box,
+				linear-gradient(120deg, #4a9eff, #00e5ff, #bd93f9) border-box;
+			border: 1px solid transparent;
+			border-radius: 8px;
+			padding: 10px 12px;
 			overflow-x: auto;
-			border-left: 2px solid var(--cy-magenta);
+			color: #f8f8f2;
 		}
-		.msg-inner pre code { background: none; padding: 0; }
-		.msg-inner table { border-collapse: collapse; width: 100%; }
-		.msg-inner th, .msg-inner td { border: 1px solid rgba(0,229,255,0.25); padding: 4px 8px; }
+		.msg-inner pre code {
+			background: none;
+			padding: 0;
+			color: inherit;
+		}
+		.msg-inner pre::-webkit-scrollbar { height: 6px; }
+		.msg-inner pre::-webkit-scrollbar-thumb {
+			background: rgba(139,233,253,0.3);
+			border-radius: 3px;
+		}
+		.code-block { position: relative; }
+		.code-copy-btn {
+			position: absolute;
+			top: 6px;
+			right: 6px;
+			width: 22px;
+			height: 22px;
+			background: rgba(40,42,54,0.9);
+			border: 1px solid rgba(139,233,253,0.3);
+			color: #8be9fd;
+			border-radius: 4px;
+			cursor: pointer;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0;
+			opacity: 0;
+			transition: opacity 0.15s ease;
+		}
+		.code-block:hover .code-copy-btn { opacity: 1; }
+		.code-copy-btn:hover { background: rgba(68,71,90,0.95); border-color: #8be9fd; }
+		.table-wrapper {
+			max-width: 100%;
+			overflow-x: auto;
+			border-radius: 6px;
+			border: 1px solid rgba(0,229,255,0.15);
+			margin: 4px 0;
+		}
+		.msg-inner table {
+			width: 100%;
+			border-collapse: collapse;
+			font-size: 12px;
+		}
+		.msg-inner th, .msg-inner td {
+			border: 1px solid rgba(0,229,255,0.25);
+			padding: 6px 8px;
+			text-align: left;
+			white-space: normal;
+			word-break: break-word;
+		}
+		.msg-inner th {
+			background: rgba(0,229,255,0.08);
+			color: #ffffff;
+			font-weight: 600;
+		}
+		.msg-inner tr:nth-child(even) td { background: rgba(0,0,0,0.15); }
+		.msg-inner img { max-width: 100%; height: auto; }
+		.table-wrapper::-webkit-scrollbar { height: 6px; }
+		.table-wrapper::-webkit-scrollbar-thumb {
+			background: rgba(0,229,255,0.3);
+			border-radius: 3px;
+		}
 
 		.msg-actions {
 			display: flex;
@@ -949,86 +1205,126 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
 	<div id="header">
-		<div id="header-left">NVIDIA Chat</div>
+		<div id="header-left">NVIDIA Chat <span id="version-badge">v${this.version}</span></div>
 		<div id="header-right">
 			<button class="hbtn" id="attachBtn" title="Adjuntar selección del editor"></button>
 			<button class="hbtn" id="modelsBtn" title="Proveedores y modelos"></button>
 			<button class="hbtn" id="permsBtn" title="Permisos"></button>
 			<button class="hbtn" id="folderBtn" title="Carpeta de salida"></button>
 			<button class="hbtn" id="chatsBtn" title="Lista de chats"></button>
+			<button class="hbtn" id="debugBtn" title="Consola de depuración"></button>
+			<button class="hbtn" id="donateBtn" title="Donaciones"></button>
 			<button class="hbtn" id="gearBtn" title="Configuración"></button>
 		</div>
 	</div>
 
 	<div id="popup-layer">
 		<div id="models-popup" class="popup">
-			<p class="popup-title">Proveedor y modelo</p>
+			<p class="popup-title" id="title-models">Proveedor y modelo</p>
+			<div id="prov-switches">
+				<div class="prov-switch-row">
+					<span class="switch-label">NVIDIA</span>
+					<label class="switch">
+						<input type="checkbox" id="provEnabledNvidia" checked>
+						<span class="slider"></span>
+					</label>
+				</div>
+				<div class="prov-switch-row">
+					<span class="switch-label">OpenRouter</span>
+					<label class="switch">
+						<input type="checkbox" id="provEnabledOpenrouter" checked>
+						<span class="slider"></span>
+					</label>
+				</div>
+				<div class="prov-switch-row">
+					<span class="switch-label">DeepSeek</span>
+					<label class="switch">
+						<input type="checkbox" id="provEnabledDeepseek" checked>
+						<span class="slider"></span>
+					</label>
+				</div>
+			</div>
 			<div id="prov-tabs">
-				<button class="prov-btn active" data-prov="nvidia">NVIDIA</button>
-				<button class="prov-btn" data-prov="openrouter">OpenRouter</button>
+				<button class="prov-btn active" id="prov-nvidia" data-prov="nvidia">NVIDIA</button>
+				<button class="prov-btn" id="prov-openrouter" data-prov="openrouter">OpenRouter</button>
+				<button class="prov-btn" id="prov-deepseek" data-prov="deepseek">DeepSeek</button>
 			</div>
 			<div id="model-row">
-				<span class="ico"></span>
+				<span class="ico" id="icon-model"></span>
 				<select id="model-select"><option>Cargando modelos...</option></select>
 			</div>
 		</div>
 		<div id="perms-popup" class="popup">
-			<p class="popup-title">Permisos</p>
+			<p class="popup-title" id="title-perms">Permisos</p>
 			<div id="auto-row">
-				<span class="ico"></span>
-				<label class="switch-label">Auto aprobar (legacy)</label>
-				<label class="switch">
+				<span class="ico" id="icon-auto"></span>
+				<label class="switch-label" id="label-auto">Auto aprobar (legacy)</label>
+				<label class="switch" id="switch-auto">
 					<input type="checkbox" id="autoApprove" title="Aprobar automáticamente escritura y ejecución de comandos">
-					<span class="slider"></span>
+					<span class="slider" id="slider-auto"></span>
 				</label>
 			</div>
 			<div id="web-row">
-				<span class="ico"></span>
-				<label class="switch-label">Buscar en internet</label>
-				<label class="switch">
+				<span class="ico" id="icon-web"></span>
+				<label class="switch-label" id="label-web">Buscar en internet</label>
+				<label class="switch" id="switch-web">
 					<input type="checkbox" id="webSearch" title="Permitir que el modelo busque información curada en internet">
-					<span class="slider"></span>
+					<span class="slider" id="slider-web"></span>
 				</label>
 			</div>
 			<div id="cmd-row">
-				<span class="ico"></span>
-				<label class="switch-label">Ejecutar comandos</label>
-				<label class="switch">
+				<span class="ico" id="icon-cmd"></span>
+				<label class="switch-label" id="label-cmd">Ejecutar comandos</label>
+				<label class="switch" id="switch-cmd">
 					<input type="checkbox" id="runCommand" title="Permitir ejecutar comandos en terminal (CMD/PowerShell)">
-					<span class="slider"></span>
+					<span class="slider" id="slider-cmd"></span>
 				</label>
 			</div>
 			<div id="dl-row">
-				<span class="ico"></span>
-				<label class="switch-label">Descargar archivos</label>
-				<label class="switch">
+				<span class="ico" id="icon-dl"></span>
+				<label class="switch-label" id="label-dl">Descargar archivos</label>
+				<label class="switch" id="switch-dl">
 					<input type="checkbox" id="downloadFile" title="Permitir descargar archivos desde internet">
-					<span class="slider"></span>
+					<span class="slider" id="slider-dl"></span>
 				</label>
 			</div>
 			<div id="git-row">
-				<span class="ico"></span>
-				<label class="switch-label">Git</label>
-				<label class="switch">
+				<span class="ico" id="icon-git"></span>
+				<label class="switch-label" id="label-git">Git</label>
+				<label class="switch" id="switch-git">
 					<input type="checkbox" id="gitPerm" title="Permitir operaciones de Git (commit, push, etc.)">
-					<span class="slider"></span>
+					<span class="slider" id="slider-git"></span>
 				</label>
 			</div>
 		</div>
 		<div id="folder-popup" class="popup">
-			<p class="popup-title">Carpeta de salida</p>
-			<div class="folder-info">
-				<span class="ico"></span>
+			<p class="popup-title" id="title-folder">Carpeta de salida</p>
+			<div class="folder-info" id="folder-info">
+				<span class="ico" id="icon-folder"></span>
 				<span id="output-dir">Cargando carpeta...</span>
 			</div>
 			<button id="setDirBtn">Cambiar carpeta</button>
+		</div>
+		<div id="donate-popup" class="popup">
+			<p class="popup-title" id="title-donate">Apoyá el proyecto</p>
+			<img id="donate-anim" src="${donationGifUri}" alt="Donación">
+			<p class="donate-text">Si te resulta útil esta extensión, podés invitarme un café 😊</p>
+			<div class="donate-row">
+				<span class="ico" id="icon-paypal"></span>
+				<span id="paypal-email">martinoviedo@disroot.org</span>
+			</div>
+			<div class="donate-actions">
+				<button id="donateCopyBtn" title="Copiar email de PayPal">Copiar email</button>
+				<button id="donateOpenBtn" title="Abrir PayPal">Donar</button>
+			</div>
+			<button id="bmcBtn" title="Buy Me a Coffee">☕ Buy Me a Coffee</button>
 		</div>
 	</div>
 
 	<div id="drawer-overlay"></div>
 	<div id="drawer">
 		<div id="drawer-head">
-			<h3>Chats</h3>
+			<h3 id="drawer-title">Chats</h3>
 			<button id="drawer-close" title="Cerrar"></button>
 		</div>
 		<div id="chat-list"></div>
@@ -1038,7 +1334,7 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 	</div>
 
 	<div id="context-chip">
-		<span class="ico"></span>
+		<span class="ico" id="icon-context"></span>
 		<span id="context-label"></span>
 		<button id="context-clear" title="Quitar contexto"></button>
 	</div>
@@ -1060,6 +1356,10 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 		let gotFirstChunk = false;
 		let savedModel = '';
 		let inited = false;
+		let msgCounter = 0;
+		let nvidiaEnabled = true;
+		let openrouterEnabled = true;
+		let deepseekEnabled = true;
 
 		const ICONS = {
 			settings: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
@@ -1080,7 +1380,11 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			refresh: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>',
 			download: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>',
 			plus: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>',
-			x: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>'
+			x: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+			terminal: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>',
+			check: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+			heart: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>',
+			coffee: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v2"/><path d="M14 2v2"/><path d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/><path d="M6 2v2"/></svg>'
 		};
 
 		// Header icons
@@ -1089,6 +1393,8 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 		document.getElementById('permsBtn').innerHTML = ICONS.shield;
 		document.getElementById('folderBtn').innerHTML = ICONS.folder;
 		document.getElementById('chatsBtn').innerHTML = ICONS.chats;
+		document.getElementById('debugBtn').innerHTML = ICONS.terminal;
+		document.getElementById('donateBtn').innerHTML = ICONS.heart;
 		document.getElementById('gearBtn').innerHTML = ICONS.settings;
 		document.getElementById('send').innerHTML = ICONS.send;
 		document.getElementById('model-row').querySelector('.ico').innerHTML = ICONS.cpu;
@@ -1098,6 +1404,7 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 		document.getElementById('dl-row').querySelector('.ico').innerHTML = ICONS.download;
 		document.getElementById('git-row').querySelector('.ico').innerHTML = ICONS.box;
 		document.getElementById('folder-popup').querySelector('.folder-info .ico').innerHTML = ICONS.folder;
+		document.getElementById('donate-popup').querySelector('.donate-row .ico').innerHTML = ICONS.coffee;
 		document.getElementById('context-chip').querySelector('.ico').innerHTML = ICONS.paperclip;
 		document.getElementById('context-clear').innerHTML = ICONS.x;
 		document.getElementById('drawer-close').innerHTML = ICONS.x;
@@ -1107,6 +1414,45 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			const div = document.createElement('div');
 			div.textContent = text;
 			return div.innerHTML;
+		}
+
+		function enhanceCodeBlocks(container) {
+			if (!container) return;
+			container.querySelectorAll('pre').forEach((pre) => {
+				if (pre.parentElement && pre.parentElement.classList.contains('code-block')) return;
+				const wrapper = document.createElement('div');
+				wrapper.className = 'code-block';
+				pre.parentNode.insertBefore(wrapper, pre);
+				wrapper.appendChild(pre);
+				const btn = document.createElement('button');
+				btn.className = 'code-copy-btn';
+				btn.title = 'Copiar código';
+				btn.innerHTML = ICONS.copy;
+				btn.addEventListener('click', () => {
+					const code = pre.querySelector('code');
+					const text = code ? code.textContent : pre.textContent;
+					vscode.postMessage({ command: 'copyText', text });
+					btn.innerHTML = ICONS.check;
+					setTimeout(() => { btn.innerHTML = ICONS.copy; }, 1500);
+				});
+				wrapper.appendChild(btn);
+			});
+		}
+
+		function enhanceTables(container) {
+			if (!container) return;
+			container.querySelectorAll('table').forEach((table) => {
+				if (table.parentElement && table.parentElement.classList.contains('table-wrapper')) return;
+				const wrapper = document.createElement('div');
+				wrapper.className = 'table-wrapper';
+				table.parentNode.insertBefore(wrapper, table);
+				wrapper.appendChild(table);
+			});
+		}
+
+		function enhanceContent(container) {
+			enhanceCodeBlocks(container);
+			enhanceTables(container);
 		}
 
 		function mdRender(text) {
@@ -1130,19 +1476,25 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			const chat = document.getElementById('chat');
 			const row = document.createElement('div');
 			row.className = 'msg-row ' + role;
+			row.id = 'msg-' + (++msgCounter);
 
 			const avatar = document.createElement('div');
 			avatar.className = 'msg-avatar';
+			avatar.id = 'msg-avatar-' + msgCounter;
 			avatar.innerHTML = role === 'user' ? ICONS.user : ICONS.bot;
 
 			const col = document.createElement('div');
 			col.className = 'msg-col';
+			col.id = 'msg-col-' + msgCounter;
 
 			const bubble = document.createElement('div');
 			bubble.className = 'msg-bubble';
+			bubble.id = 'msg-bubble-' + msgCounter;
 			const inner = document.createElement('div');
 			inner.className = 'msg-inner';
+			inner.id = 'msg-inner-' + msgCounter;
 			if (isHtml) { inner.innerHTML = text; } else { inner.textContent = text; }
+			if (isHtml) { enhanceContent(inner); }
 			bubble.appendChild(inner);
 			col.appendChild(bubble);
 
@@ -1188,7 +1540,35 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			}
 		}
 
+		function refreshProviderUI() {
+			const nvidiaTab = document.getElementById('prov-nvidia');
+			const openrouterTab = document.getElementById('prov-openrouter');
+			const deepseekTab = document.getElementById('prov-deepseek');
+			if (nvidiaTab) { nvidiaTab.style.display = nvidiaEnabled ? '' : 'none'; }
+			if (openrouterTab) { openrouterTab.style.display = openrouterEnabled ? '' : 'none'; }
+			if (deepseekTab) { deepseekTab.style.display = deepseekEnabled ? '' : 'none'; }
+
+			if (!nvidiaEnabled && !openrouterEnabled && !deepseekEnabled) {
+				nvidiaEnabled = true;
+				document.getElementById('provEnabledNvidia').checked = true;
+				if (nvidiaTab) { nvidiaTab.style.display = ''; }
+			}
+			const enabledProviders = [];
+			if (nvidiaEnabled) enabledProviders.push('nvidia');
+			if (openrouterEnabled) enabledProviders.push('openrouter');
+			if (deepseekEnabled) enabledProviders.push('deepseek');
+			if (!enabledProviders.includes(currentProvider)) {
+				currentProvider = enabledProviders[0] || 'nvidia';
+				vscode.postMessage({ command: 'setProvider', value: currentProvider });
+			}
+			document.querySelectorAll('.prov-btn').forEach((b) => {
+				if (b.dataset.prov === currentProvider) { b.classList.add('active'); }
+				else { b.classList.remove('active'); }
+			});
+		}
+
 		function loadModels() {
+			refreshProviderUI();
 			const select = document.getElementById('model-select');
 			if (!select) return;
 			select.innerHTML = '<option>Cargando modelos...</option>';
@@ -1214,6 +1594,25 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 		document.getElementById('modelsBtn').addEventListener('click', () => togglePopup('models'));
 		document.getElementById('permsBtn').addEventListener('click', () => togglePopup('perms'));
 		document.getElementById('folderBtn').addEventListener('click', () => togglePopup('folder'));
+		document.getElementById('debugBtn').addEventListener('click', () => {
+			closeAllPopups();
+			vscode.postMessage({ command: 'openDebugConsole' });
+		});
+		document.getElementById('donateBtn').addEventListener('click', () => {
+			togglePopup('donate');
+		});
+		document.getElementById('donateCopyBtn').addEventListener('click', () => {
+			vscode.postMessage({ command: 'copyText', text: 'martinoviedo@disroot.org' });
+			const btn = document.getElementById('donateCopyBtn');
+			btn.textContent = '¡Copiado!';
+			setTimeout(() => { btn.textContent = 'Copiar email'; }, 1500);
+		});
+		document.getElementById('donateOpenBtn').addEventListener('click', () => {
+			vscode.postMessage({ command: 'openExternal', url: 'https://www.paypal.com/donate/?business=martinoviedo%40disroot.org' });
+		});
+		document.getElementById('bmcBtn').addEventListener('click', () => {
+			vscode.postMessage({ command: 'openExternal', url: 'https://www.buymeacoffee.com/martinalejandrooviedo' });
+		});
 		document.getElementById('gearBtn').addEventListener('click', () => {
 			closeAllPopups();
 			vscode.postMessage({ command: 'openSettings' });
@@ -1261,6 +1660,24 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 				vscode.postMessage({ command: 'setProvider', value: currentProvider });
 				loadModels();
 			});
+		});
+
+		document.getElementById('provEnabledNvidia').addEventListener('change', (e) => {
+			nvidiaEnabled = e.target.checked;
+			vscode.postMessage({ command: 'setProviderEnabled', provider: 'nvidia', value: nvidiaEnabled });
+			loadModels();
+		});
+
+		document.getElementById('provEnabledOpenrouter').addEventListener('change', (e) => {
+			openrouterEnabled = e.target.checked;
+			vscode.postMessage({ command: 'setProviderEnabled', provider: 'openrouter', value: openrouterEnabled });
+			loadModels();
+		});
+
+		document.getElementById('provEnabledDeepseek').addEventListener('change', (e) => {
+			deepseekEnabled = e.target.checked;
+			vscode.postMessage({ command: 'setProviderEnabled', provider: 'deepseek', value: deepseekEnabled });
+			loadModels();
 		});
 
 		document.getElementById('model-select').addEventListener('change', (e) => {
@@ -1352,11 +1769,14 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			for (const c of chats) {
 				const item = document.createElement('div');
 				item.className = 'chat-item' + (c.id === activeId ? ' active' : '');
+				item.id = 'chat-item-' + c.id;
 				const title = document.createElement('span');
 				title.className = 'chat-title';
+				title.id = 'chat-title-' + c.id;
 				title.textContent = c.title;
 				const del = document.createElement('button');
 				del.className = 'chat-del';
+				del.id = 'chat-del-' + c.id;
 				del.title = 'Eliminar';
 				del.innerHTML = ICONS.trash;
 				del.addEventListener('click', (e) => {
@@ -1383,6 +1803,12 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 				const s = message.settings || {};
 				currentProvider = s.provider || 'nvidia';
 				savedModel = s.model || '';
+				nvidiaEnabled = s.nvidiaEnabled !== false;
+				openrouterEnabled = s.openrouterEnabled !== false;
+				deepseekEnabled = s.deepseekEnabled !== false;
+				document.getElementById('provEnabledNvidia').checked = nvidiaEnabled;
+				document.getElementById('provEnabledOpenrouter').checked = openrouterEnabled;
+				document.getElementById('provEnabledDeepseek').checked = deepseekEnabled;
 				document.querySelectorAll('.prov-btn').forEach((b) => {
 					if (b.dataset.prov === currentProvider) { b.classList.add('active'); }
 					else { b.classList.remove('active'); }
@@ -1426,6 +1852,7 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 				const inner = window.__aiInner;
 				gotFirstChunk = true;
 				inner.innerHTML = message.html;
+				enhanceContent(inner);
 				document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
 			} else if (message.command === 'streamStart') {
 				const inner = window.__aiInner;
@@ -1443,6 +1870,7 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			} else if (message.command === 'streamEnd') {
 				const inner = window.__aiInner;
 				inner.innerHTML = message.html;
+				enhanceContent(inner);
 				attachCopyAction(inner);
 				history.push({ role: 'assistant', content: message.text });
 				setStreaming(false);

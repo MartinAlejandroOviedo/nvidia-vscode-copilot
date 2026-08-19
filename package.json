@@ -2,7 +2,7 @@
 	"name": "nvidia-vscode-copilot",
 	"displayName": "NVIDIA Models for VS Code",
 	"description": "NVIDIA models provider for VS Code Chat",
-	"version": "0.1.0",
+	"version": "1.0.2",
 	"publisher": "MartinAlejandroOviedo",
 	"engines": {
 		"vscode": "^1.93.0"
@@ -13,9 +13,7 @@
 	},
 	"license": "MIT",
 	"activationEvents": [
-		"onLanguageModelChat:nvidia.nvidia",
-		"onCommand:nvidia.setOutputDirectory",
-		"onCommand:nvidia.openSettings"
+		"onLanguageModelChat:nvidia.nvidia"
 	],
 	"categories": [
 		"AI",
@@ -29,7 +27,7 @@
 				{
 					"id": "nvidia-chat",
 					"title": "NVIDIA Chat",
-					"icon": "media/activity-icon.png"
+					"icon": "media/activity-icon.svg"
 				}
 			]
 		},
@@ -50,6 +48,10 @@
 			{
 				"command": "nvidia.openSettings",
 				"title": "NVIDIA: Abrir Configuración"
+			},
+			{
+				"command": "nvidia.openDebugConsole",
+				"title": "NVIDIA: Abrir consola de depuración"
 			}
 		],
 		"configuration": {
@@ -58,12 +60,41 @@
 				"nvidia.apiKey": {
 					"type": "string",
 					"default": "",
-					"description": "NVIDIA API key. Almacenada en la configuración global para que persista entre instalaciones."
+					"description": "NVIDIA API key (clave única). Se guarda en la configuración global para que persista entre instalaciones."
+				},
+				"nvidia.apiKeys": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "Lista de API keys de NVIDIA. Si una se queda sin tokens o es inválida, se usa automáticamente la siguiente. Puedes agregar, quitar y reordenar claves."
 				},
 				"nvidia.openrouterApiKey": {
 					"type": "string",
 					"default": "",
-					"description": "OpenRouter API key. Almacenada en la configuración global para que persista entre instalaciones."
+					"description": "OpenRouter API key (clave única). Se guarda en la configuración global para que persista entre instalaciones."
+				},
+				"nvidia.openrouterApiKeys": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "Lista de API keys de OpenRouter. Si una se queda sin tokens o es inválida, se usa automáticamente la siguiente. Puedes agregar, quitar y reordenar claves."
+				},
+				"nvidia.deepseekApiKey": {
+					"type": "string",
+					"default": "",
+					"description": "DeepSeek API key (clave única). Se guarda en la configuración global para que persista entre instalaciones."
+				},
+				"nvidia.deepseekApiKeys": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "Lista de API keys de DeepSeek. Si una se queda sin tokens o es inválida, se usa automáticamente la siguiente. Puedes agregar, quitar y reordenar claves."
 				},
 				"nvidia.outputDirectory": {
 					"type": "string",
@@ -74,13 +105,33 @@
 					"type": "string",
 					"default": "",
 					"description": "Reemplaza el prompt de sistema por defecto. Si se define, sustituye el primer mensaje de sistema enviado al modelo. Déjalo vacío para usar el prompt por defecto."
+				},
+				"nvidia.debugLevel": {
+					"type": "string",
+					"enum": [
+						"off",
+						"error",
+						"warn",
+						"info",
+						"debug"
+					],
+					"enumDescriptions": [
+						"Sin registro",
+						"Solo errores",
+						"Errores y advertencias",
+						"Info: llamadas a la API y ejecución de herramientas",
+						"Debug: incluye payloads completos de peticiones y respuestas"
+					],
+					"default": "off",
+					"description": "Nivel de registro de depuración. Los mensajes se muestran en la consola de depuración (comando 'NVIDIA: Abrir consola de depuración')."
 				}
 			}
 		},
 		"languageModelChatProviders": [
 			{
 				"displayName": "NVIDIA Vscode Extension",
-				"vendor": "nvidia.nvidia"
+				"vendor": "nvidia.nvidia",
+				"icon": "media/icon.png"
 			}
 		]
 	},

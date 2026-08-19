@@ -1,5 +1,8 @@
+import * as path from "path";
+import { fileURLToPath } from "url";
 import { defineConfig } from "vite";
-import { resolve } from "path";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
 	root: "./",
@@ -16,7 +19,7 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
-			"@": resolve(__dirname, "src"),
+			"@": path.resolve(__dirname, "src"),
 		},
 	},
 });
