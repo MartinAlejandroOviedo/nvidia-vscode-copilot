@@ -9,6 +9,8 @@ const MODEL_ID_PREFIX = "vscode-nvidia/";
 const NVIDIA_API_BASE = "https://integrate.api.nvidia.com/v1";
 const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+const ORCAROUTER_API_BASE = "https://api.orcarouter.ai/v1";
+const ORCAROUTER_MODELS_URL = "https://api.orcarouter.ai/v1/models";
 const DEFAULT_MODEL = "nvidia/llama-3.3-nemotron-super-49b-v1";
 const MAX_AGENT_ITERATIONS = 10;
 const MAX_HISTORY_MESSAGES = 20;
@@ -635,43 +637,94 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 	 */
 	/** True if the accumulated text could be a text-mode tool call or a <think> block. */
 	private looksLikeToolCall(s: string): boolean {
-		if (/<(tool_call|function\s*=|tool\b|think\b)/i.test(s)) return true;
+		if (
+			/<(tool_call|function\s*=|tool\b|think\b|invoke\b|function_calls\b|parameter\b|antml:)/i.test(
+				s,
+			)
+		) {
+			return true;
+		}
 		const head = s.trimStart();
-		return ["<tool_call", "<function", "<tool", "<think"].some((p) => p.startsWith(head));
+		return ["<tool_call", "<function", "<tool", "<think", "<invoke", "<parameter"].some((p) =>
+			p.startsWith(head),
+		);
 	}
 
-	/** Remove any raw <tool_call> / <function> blocks from the text. */
+	/**
+	 * Remove raw tool-call tags from model output. Handles the OpenAI text style
+	 * (<tool_call>, <function=...>, <parameter=...>), the Anthropic/antml style
+	 * (<function_calls>, <invoke name="...">, <parameter name="...">) and <think>
+	 * reasoning blocks. Streaming-safe: unclosed blocks and partial trailing tags
+	 * are removed too.
+	 */
 	private stripToolCallTags(text: string): string {
-		return text
+		let out = text
+			.replace(/<(?:antml:)?function_calls>[\s\S]*?<\/(?:antml:)?function_calls>/gi, "")
+			.replace(/<(?:antml:)?invoke[^>]*>[\s\S]*?<\/(?:antml:)?invoke>/gi, "")
+			.replace(/<(?:antml:)?parameter[^>]*>[\s\S]*?<\/(?:antml:)?parameter>/gi, "")
 			.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "")
 			.replace(/<function\s*=[^>]*>[\s\S]*?<\/function>/gi, "")
 			.replace(/<parameter\s*=[^>]*>[\s\S]*?<\/parameter>/gi, "")
-			.trim();
+			.replace(/<think>[\s\S]*?<\/think>/gi, "");
+		out = out.replace(
+			/<(?:antml:)?(?:function_calls|invoke|tool_call|function|parameter|think)\b[^>]*>[\s\S]*$/gi,
+			"",
+		);
+		out = out.replace(/<[a-zA-Z][^>]*$/g, "");
+		return out.trim();
 	}
 
 	/** Remove <think>...</think> reasoning blocks (DeepSeek-R1 and similar). */
 	private stripThinkTags(text: string): string {
-		return text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+		return text
+			.replace(/<think>[\s\S]*?<\/think>/gi, "")
+			.replace(/<think\b[^>]*>[\s\S]*$/gi, "")
+			.trim();
 	}
 
 	private parseTextToolCall(
 		content: string,
 	): { name: string; args: Record<string, string> } | undefined {
+		// Legacy style: <function=NAME> ... <parameter=key>value</parameter> ... </function>
 		const funcMatch = content.match(/<function\s*=\s*([^>]+)>/i);
-		if (!funcMatch) return undefined;
-		const name = funcMatch[1].trim();
-		const args: Record<string, string> = {};
-		const paramRegex = /<parameter\s*=\s*([^>]+)>([\s\S]*?)<\/parameter>/gi;
-		let m;
-		while ((m = paramRegex.exec(content)) !== null) {
-			args[m[1].trim()] = m[2].trim();
+		if (funcMatch) {
+			const name = funcMatch[1].trim();
+			const args: Record<string, string> = {};
+			const paramRegex = /<parameter\s*=\s*([^>]+)>([\s\S]*?)<\/parameter>/gi;
+			let m;
+			while ((m = paramRegex.exec(content)) !== null) {
+				args[m[1].trim()] = m[2].trim();
+			}
+			if (Object.keys(args).length === 0) {
+				// Fallback: treat the text after the function tag as a single "query".
+				const body = content.replace(/<[^>]+>/g, " ").trim();
+				if (body) args.query = body;
+			}
+			return { name, args };
 		}
-		if (Object.keys(args).length === 0) {
-			// Fallback: treat the text after the function tag as a single "query".
-			const body = content.replace(/<[^>]+>/g, " ").trim();
-			if (body) args.query = body;
+
+		// Anthropic/antml style: <function_calls><invoke name="NAME"><parameter name="key">value</parameter></invoke></function_calls>
+		const invokeMatch = content.match(
+			/<(?:antml:)?invoke\s+[^>]*name\s*=\s*["']([^"']+)["'][^>]*>/i,
+		);
+		if (invokeMatch) {
+			const name = invokeMatch[1].trim();
+			const args: Record<string, string> = {};
+			const paramRegex =
+				/<(?:antml:)?parameter\s+[^>]*name\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/(?:antml:)?parameter>/gi;
+			let m;
+			while ((m = paramRegex.exec(content)) !== null) {
+				args[m[1].trim()] = m[2].trim();
+			}
+			if (Object.keys(args).length === 0) {
+				// Fallback: treat the text after the invoke tag as a single "query".
+				const body = content.replace(/<[^>]+>/g, " ").trim();
+				if (body) args.query = body;
+			}
+			return { name, args };
 		}
-		return { name, args };
+
+		return undefined;
 	}
 
 	/** List the workspace root so the model knows the project structure. */
@@ -759,8 +812,8 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 			const stream = await this.createWithFallback(clients, body, signal);
 
 			let content = "";
-			let buffering = false;
 			let reasoningNotified = false;
+			let cleanYielded = 0;
 			const toolCalls = new Map<number, ToolCallAccum>();
 
 			const iterable = stream as unknown as AsyncIterable<any>;
@@ -780,13 +833,11 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 						reasoningNotified = true;
 						onReasoning?.();
 					}
-					if (!buffering) {
-						const head = content.trimStart();
-						if (this.looksLikeToolCall(head)) {
-							buffering = true;
-						} else {
-							yield delta.content;
-						}
+					// Yield only the sanitized (tag-stripped) portion not yet sent.
+					const clean = this.stripToolCallTags(content);
+					if (clean.length > cleanYielded) {
+						yield clean.slice(cleanYielded);
+						cleanYielded = clean.length;
 					}
 				}
 				if (delta.tool_calls) {
@@ -813,7 +864,7 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 						JSON.stringify(textTool.args),
 					);
 					// Feed the result back as a plain message so the model answers
-					// naturally without echoing the raw <tool_call> tags.
+					// naturally without echoing the raw tool-call tags.
 					convo.push({
 						role: "user",
 						content:
@@ -823,17 +874,13 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 					});
 					continue;
 				}
-				if (buffering) {
-					// It looked like a tool call but couldn't be parsed; show it.
-					yield this.stripToolCallTags(cleanContent);
-				}
-				return; // final answer
+				return; // final answer (already streamed sanitized)
 			}
 
 			// Push assistant message with tool calls
 			const assistantMsg: any = {
 				role: "assistant",
-				content: content || null,
+				content: this.stripToolCallTags(content) || null,
 				tool_calls: [...toolCalls.values()].map((tc) => ({
 					id: tc.id,
 					type: "function",
@@ -947,6 +994,32 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 			.map((m) => m.id as string);
 	}
 
+	/** Get the list of OrcaRouter FREE models (id contains "free"). */
+	async getOrcaRouterFreeModels(): Promise<string[]> {
+		const apiKeys = await this.getOrcaRouterApiKeys();
+		if (apiKeys.length === 0) {
+			throw new Error(
+				"OrcaRouter API key no configurada. Abre la Configuración e ingresa tu clave.",
+			);
+		}
+		const resp = await fetch(ORCAROUTER_MODELS_URL, {
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${apiKeys[0]}`,
+			},
+		});
+		if (!resp.ok) {
+			throw new Error(`OrcaRouter models ${resp.status}: ${await resp.text()}`);
+		}
+		const data = (await resp.json()) as {
+			data?: Array<{ id?: string }>;
+		};
+		const models = data.data ?? [];
+		return models
+			.filter((m) => !!m.id && m.id.toLowerCase().includes("free"))
+			.map((m) => m.id as string);
+	}
+
 	/** Stream a chat completion against OpenRouter with agent tool-calling. */
 	async *streamOpenRouterChat(
 		messages: ChatMessage[],
@@ -1002,6 +1075,43 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 		}
 	}
 
+	/** Stream a chat completion against OrcaRouter with agent tool-calling. */
+	async *streamOrcaRouterChat(
+		messages: ChatMessage[],
+		model: string,
+		signal?: AbortSignal,
+		onTool?: (name: string) => void,
+		onReasoning?: () => void,
+	): AsyncGenerator<string> {
+		const apiKeys = await this.getOrcaRouterApiKeys();
+		if (apiKeys.length === 0) {
+			throw new Error(
+				"OrcaRouter API key no configurada. Abre la Configuración e ingresa tu clave.",
+			);
+		}
+
+		const clients = apiKeys.map(
+			(key) =>
+				new OpenAI({
+					apiKey: key,
+					baseURL: ORCAROUTER_API_BASE,
+					timeout: 300000,
+				}),
+		);
+
+		const isReasoning =
+			model.toLowerCase().includes("reasoner") ||
+			model.toLowerCase().includes("reasoning");
+		const convo: any[] = [await this.buildSystemMessage(), ...this.trimHistory(messages)];
+		this.log("info", `streamOrcaRouterChat: modelo=${model}, mensajes=${messages.length}, claves=${clients.length}`);
+		try {
+			yield* this.runAgentLoop(clients, model, convo, signal, onTool, isReasoning, onReasoning);
+		} catch (err) {
+			this.log("error", `streamOrcaRouterChat: ${String(err)}`);
+			throw new Error(this.friendlyError(err));
+		}
+	}
+
 	private async getOpenRouterApiKeys(): Promise<string[]> {
 		const keys: string[] = [];
 
@@ -1041,6 +1151,93 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 		await vscode.workspace
 			.getConfiguration("nvidia")
 			.update("openrouterApiKey", key, vscode.ConfigurationTarget.Global);
+	}
+
+	private async getOrcaRouterApiKeys(): Promise<string[]> {
+		const keys: string[] = [];
+
+		const arr = vscode.workspace
+			.getConfiguration("nvidia")
+			.get<string[]>("orcarouterApiKeys");
+		if (Array.isArray(arr)) {
+			for (const k of arr) {
+				if (k && k.trim()) keys.push(k.trim());
+			}
+		}
+
+		let raw = await this.secrets.get("orcarouter.apiKey");
+		if (!raw) {
+			raw = vscode.workspace
+				.getConfiguration("nvidia")
+				.get<string>("orcarouterApiKey");
+		}
+		if (raw) {
+			for (const k of raw.split(/[\n,;]+/)) {
+				const t = k.trim();
+				if (t) keys.push(t);
+			}
+		}
+
+		return [...new Set(keys)];
+	}
+
+	private async getOrcaRouterApiKey(): Promise<string | undefined> {
+		const keys = await this.getOrcaRouterApiKeys();
+		return keys[0];
+	}
+
+	/** Store the OrcaRouter API key in VS Code secret storage. */
+	async setOrcaRouterApiKey(key: string): Promise<void> {
+		await this.secrets.store("orcarouter.apiKey", key);
+		await vscode.workspace
+			.getConfiguration("nvidia")
+			.update("orcarouterApiKey", key, vscode.ConfigurationTarget.Global);
+	}
+
+	/** Get the configured API keys for a provider. */
+	async getProviderApiKeys(provider: string): Promise<string[]> {
+		switch (provider) {
+			case "openrouter":
+				return this.getOpenRouterApiKeys();
+			case "deepseek":
+				return this.getDeepSeekApiKeys();
+			case "orcarouter":
+				return this.getOrcaRouterApiKeys();
+			default:
+				return this.getApiKeys();
+		}
+	}
+
+	/**
+	 * Store the API keys for a provider. Writes both the global config array
+	 * (`nvidia.<provider>ApiKeys`) and the secret storage so keys persist and
+	 * rotate automatically when one fails.
+	 */
+	async setProviderApiKeys(provider: string, keys: string[]): Promise<void> {
+		const clean = [
+			...new Set(
+				keys
+					.map((k) => k.trim())
+					.filter((k) => k.length > 0),
+			),
+		];
+		const secretKey =
+			provider === "nvidia" ? "nvidia.apiKey" : `${provider}.apiKey`;
+		const configKey =
+			provider === "nvidia" ? "apiKeys" : `${provider}ApiKeys`;
+
+		if (clean.length === 0) {
+			await this.secrets.delete(secretKey);
+			await vscode.workspace
+				.getConfiguration("nvidia")
+				.update(configKey, [], vscode.ConfigurationTarget.Global);
+			return;
+		}
+
+		await this.secrets.store(secretKey, clean.join("\n"));
+		await vscode.workspace
+			.getConfiguration("nvidia")
+			.update(configKey, clean, vscode.ConfigurationTarget.Global);
 	}
 
 	private async getDeepSeekApiKeys(): Promise<string[]> {

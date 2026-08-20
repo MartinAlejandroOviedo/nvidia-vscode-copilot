@@ -1,8 +1,8 @@
 {
 	"name": "nvidia-vscode-copilot",
 	"displayName": "NVIDIA Models for VS Code",
-	"description": "NVIDIA models provider for VS Code Chat",
-	"version": "1.0.2",
+	"description": "AI chat that works directly on your project: connect NVIDIA NIM, OpenRouter, DeepSeek and OrcaRouter models to read and write files, run commands, use Git, download files and search the web.",
+	"version": "1.0.3",
 	"publisher": "MartinAlejandroOviedo",
 	"engines": {
 		"vscode": "^1.93.0"
@@ -36,7 +36,8 @@
 				{
 					"type": "webview",
 					"id": "nvidia.welcome",
-					"name": "NVIDIA Chat"
+					"name": "NVIDIA Chat",
+					"icon": "media/activity-icon.svg"
 				}
 			]
 		},
@@ -95,6 +96,19 @@
 					},
 					"default": [],
 					"description": "Lista de API keys de DeepSeek. Si una se queda sin tokens o es inválida, se usa automáticamente la siguiente. Puedes agregar, quitar y reordenar claves."
+				},
+				"nvidia.orcarouterApiKey": {
+					"type": "string",
+					"default": "",
+					"description": "OrcaRouter API key (clave única). Se guarda en la configuración global para que persista entre instalaciones."
+				},
+				"nvidia.orcarouterApiKeys": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "Lista de API keys de OrcaRouter. Si una se queda sin tokens o es inválida, se usa automáticamente la siguiente. Puedes agregar, quitar y reordenar claves."
 				},
 				"nvidia.outputDirectory": {
 					"type": "string",

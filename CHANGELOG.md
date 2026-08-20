@@ -4,6 +4,20 @@ Todos los cambios notables de esta extensión se documentan en este archivo.
 
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el versionado sigue [SemVer](https://semver.org/lang/es/).
 
+## [1.0.3] - 2026-08-19
+
+### Añadido
+- Proveedor **OrcaRouter** (OpenAI-compatible) con filtrado de modelos gratuitos (id contiene "free"), múltiples API keys y rotación automática.
+- Gestor de **API Keys** en el panel (botón de llave): agregá, editá o quitá varias claves por proveedor para rotación automática, sin tocar la configuración de VS Code.
+
+### Mejorado
+- Reconocimiento y limpieza de llamadas a herramientas en formato Anthropic (`<function_calls>`, `<invoke>`, `<parameter>`) en respuestas de DeepSeek V4.
+- Nuevo icono de la extensión.
+
+### Corregido
+- La interfaz del panel no cargaba (iconos y handlers sin ejecutar) por secuencias de escape en el HTML del webview.
+- Icono faltante en el punto de extensión `views` (obligatorio en VS Code 1.134).
+
 ## [1.0.2] - 2026-08-18
 
 ### Añadido

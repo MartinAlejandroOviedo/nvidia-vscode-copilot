@@ -49,6 +49,7 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 	private readonly nvidiaEnabledKey = "nvidia.nvidiaEnabled";
 	private readonly openrouterEnabledKey = "nvidia.openrouterEnabled";
 	private readonly deepseekEnabledKey = "nvidia.deepseekEnabled";
+	private readonly orcarouterEnabledKey = "nvidia.orcarouterEnabled";
 	private abortController?: AbortController;
 
 	constructor(
@@ -207,6 +208,10 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 						this.deepseekEnabledKey,
 						true,
 					);
+					const savedOrcarouterEnabled = this.workspaceState.get<boolean>(
+						this.orcarouterEnabledKey,
+						true,
+					);
 					this.provider.setAutoApprove(savedAuto);
 					this.provider.setWebSearchEnabled(savedWeb);
 					this.provider.setPermission("runCommand", savedRunCommand);
@@ -228,6 +233,7 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 							nvidiaEnabled: savedNvidiaEnabled,
 							openrouterEnabled: savedOpenrouterEnabled,
 							deepseekEnabled: savedDeepseekEnabled,
+							orcarouterEnabled: savedOrcarouterEnabled,
 						},
 					});
 					break;
@@ -408,6 +414,8 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 						await this.workspaceState.update(this.openrouterEnabledKey, v);
 					} else if (prov === "deepseek") {
 						await this.workspaceState.update(this.deepseekEnabledKey, v);
+					} else if (prov === "orcarouter") {
+						await this.workspaceState.update(this.orcarouterEnabledKey, v);
 					}
 					break;
 				}
@@ -422,6 +430,29 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 					await this.workspaceState.update(this.modelKey, String(message.value));
 					break;
 				}
+				case "getApiKeys": {
+					const providerName: string = message.provider ?? "nvidia";
+					const keys = await this.provider.getProviderApiKeys(providerName);
+					this._view?.webview.postMessage({
+						command: "apiKeys",
+						provider: providerName,
+						keys,
+					});
+					break;
+				}
+				case "saveApiKeys": {
+					const providerName: string = message.provider ?? "nvidia";
+					const keys: string[] = Array.isArray(message.keys)
+						? message.keys.map((k: unknown) => String(k))
+						: [];
+					await this.provider.setProviderApiKeys(providerName, keys);
+					this._view?.webview.postMessage({
+						command: "apiKeysSaved",
+						provider: providerName,
+						count: keys.length,
+					});
+					break;
+				}
 				case "getModels": {
 					const providerName: string = message.provider ?? "nvidia";
 					try {
@@ -430,7 +461,9 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 								? await this.provider.getOpenRouterFreeModels()
 								: providerName === "deepseek"
 									? this.provider.getDeepSeekModels()
-									: await this.provider.getNemotronModels();
+									: providerName === "orcarouter"
+										? await this.provider.getOrcaRouterFreeModels()
+										: await this.provider.getNemotronModels();
 						this._view?.webview.postMessage({
 							command: "models",
 							models,
@@ -473,7 +506,9 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 								? this.provider.streamOpenRouterChat(history, model, signal, onTool, onReasoning)
 								: providerName === "deepseek"
 									? this.provider.streamDeepSeekChat(history, model, signal, onTool, onReasoning)
-									: this.provider.streamChat(history, model, signal, onTool, onReasoning);
+									: providerName === "orcarouter"
+										? this.provider.streamOrcaRouterChat(history, model, signal, onTool, onReasoning)
+										: this.provider.streamChat(history, model, signal, onTool, onReasoning);
 						for await (const chunk of gen) {
 							fullText += chunk;
 							webviewView.webview.postMessage({
@@ -815,6 +850,62 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			transition: all 0.2s ease;
 		}
 		#bmcBtn:hover { box-shadow: 0 0 10px rgba(255,221,0,0.7); transform: scale(1.02); }
+
+		/* API Keys popup */
+		#keys-popup { min-width: 280px; }
+		#keys-provider {
+			width: 100%;
+			padding: 6px;
+			background: rgba(0,0,0,0.25);
+			color: #d8d8f0;
+			border: 1px solid rgba(0,229,255,0.3);
+			border-radius: 6px;
+			font-family: inherit;
+			font-size: 11.5px;
+			margin-bottom: 6px;
+		}
+		#keys-provider option { background: var(--cy-panel); color: #d8d8f0; }
+		#keys-textarea {
+			width: 100%;
+			background: rgba(0,0,0,0.25);
+			color: #d8d8f0;
+			border: 1px solid rgba(0,255,156,0.3);
+			border-radius: 6px;
+			padding: 7px 8px;
+			resize: vertical;
+			font-family: var(--vscode-editor-font-family, monospace);
+			font-size: 11px;
+			box-sizing: border-box;
+		}
+		#keys-textarea:focus {
+			outline: none;
+			border-color: var(--cy-green);
+			box-shadow: 0 0 8px rgba(0,255,156,0.3);
+		}
+		#keys-save {
+			width: 100%;
+			margin-top: 6px;
+			padding: 7px;
+			background: linear-gradient(120deg, #00ff9c, #00e5ff);
+			color: #0a0a14;
+			border: none;
+			border-radius: 6px;
+			cursor: pointer;
+			font-family: inherit;
+			font-size: 12px;
+			font-weight: 600;
+			transition: all 0.2s ease;
+		}
+		#keys-save:hover { box-shadow: 0 0 10px rgba(0,255,156,0.6); transform: scale(1.02); }
+		#keys-status {
+			margin-top: 6px;
+			font-size: 11px;
+			color: var(--cy-green);
+			min-height: 14px;
+			opacity: 0;
+			transition: opacity 0.2s ease;
+		}
+		#keys-status.show { opacity: 1; }
 
 		/* ---------- Drawer (chats) ---------- */
 		#drawer {
@@ -1214,6 +1305,7 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			<button class="hbtn" id="chatsBtn" title="Lista de chats"></button>
 			<button class="hbtn" id="debugBtn" title="Consola de depuración"></button>
 			<button class="hbtn" id="donateBtn" title="Donaciones"></button>
+			<button class="hbtn" id="keysBtn" title="API Keys"></button>
 			<button class="hbtn" id="gearBtn" title="Configuración"></button>
 		</div>
 	</div>
@@ -1243,11 +1335,19 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 						<span class="slider"></span>
 					</label>
 				</div>
+				<div class="prov-switch-row">
+					<span class="switch-label">OrcaRouter</span>
+					<label class="switch">
+						<input type="checkbox" id="provEnabledOrcarouter" checked>
+						<span class="slider"></span>
+					</label>
+				</div>
 			</div>
 			<div id="prov-tabs">
 				<button class="prov-btn active" id="prov-nvidia" data-prov="nvidia">NVIDIA</button>
 				<button class="prov-btn" id="prov-openrouter" data-prov="openrouter">OpenRouter</button>
 				<button class="prov-btn" id="prov-deepseek" data-prov="deepseek">DeepSeek</button>
+				<button class="prov-btn" id="prov-orcarouter" data-prov="orcarouter">OrcaRouter</button>
 			</div>
 			<div id="model-row">
 				<span class="ico" id="icon-model"></span>
@@ -1319,6 +1419,18 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			</div>
 			<button id="bmcBtn" title="Buy Me a Coffee">☕ Buy Me a Coffee</button>
 		</div>
+		<div id="keys-popup" class="popup">
+			<p class="popup-title" id="title-keys">API Keys</p>
+			<select id="keys-provider">
+				<option value="nvidia">NVIDIA</option>
+				<option value="openrouter">OpenRouter</option>
+				<option value="deepseek">DeepSeek</option>
+				<option value="orcarouter">OrcaRouter</option>
+			</select>
+			<textarea id="keys-textarea" rows="5" spellcheck="false" placeholder="Pegá una API key por línea. Si una falla o se queda sin tokens, se usa automáticamente la siguiente (rotación)."></textarea>
+			<button id="keys-save">Guardar claves</button>
+			<div id="keys-status"></div>
+		</div>
 	</div>
 
 	<div id="drawer-overlay"></div>
@@ -1360,6 +1472,7 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 		let nvidiaEnabled = true;
 		let openrouterEnabled = true;
 		let deepseekEnabled = true;
+		let orcarouterEnabled = true;
 
 		const ICONS = {
 			settings: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
@@ -1384,7 +1497,8 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			terminal: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>',
 			check: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
 			heart: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>',
-			coffee: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v2"/><path d="M14 2v2"/><path d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/><path d="M6 2v2"/></svg>'
+			coffee: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v2"/><path d="M14 2v2"/><path d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/><path d="M6 2v2"/></svg>',
+			key: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>'
 		};
 
 		// Header icons
@@ -1395,6 +1509,7 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 		document.getElementById('chatsBtn').innerHTML = ICONS.chats;
 		document.getElementById('debugBtn').innerHTML = ICONS.terminal;
 		document.getElementById('donateBtn').innerHTML = ICONS.heart;
+		document.getElementById('keysBtn').innerHTML = ICONS.key;
 		document.getElementById('gearBtn').innerHTML = ICONS.settings;
 		document.getElementById('send').innerHTML = ICONS.send;
 		document.getElementById('model-row').querySelector('.ico').innerHTML = ICONS.cpu;
@@ -1544,11 +1659,13 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			const nvidiaTab = document.getElementById('prov-nvidia');
 			const openrouterTab = document.getElementById('prov-openrouter');
 			const deepseekTab = document.getElementById('prov-deepseek');
+			const orcarouterTab = document.getElementById('prov-orcarouter');
 			if (nvidiaTab) { nvidiaTab.style.display = nvidiaEnabled ? '' : 'none'; }
 			if (openrouterTab) { openrouterTab.style.display = openrouterEnabled ? '' : 'none'; }
 			if (deepseekTab) { deepseekTab.style.display = deepseekEnabled ? '' : 'none'; }
+			if (orcarouterTab) { orcarouterTab.style.display = orcarouterEnabled ? '' : 'none'; }
 
-			if (!nvidiaEnabled && !openrouterEnabled && !deepseekEnabled) {
+			if (!nvidiaEnabled && !openrouterEnabled && !deepseekEnabled && !orcarouterEnabled) {
 				nvidiaEnabled = true;
 				document.getElementById('provEnabledNvidia').checked = true;
 				if (nvidiaTab) { nvidiaTab.style.display = ''; }
@@ -1557,6 +1674,7 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 			if (nvidiaEnabled) enabledProviders.push('nvidia');
 			if (openrouterEnabled) enabledProviders.push('openrouter');
 			if (deepseekEnabled) enabledProviders.push('deepseek');
+			if (orcarouterEnabled) enabledProviders.push('orcarouter');
 			if (!enabledProviders.includes(currentProvider)) {
 				currentProvider = enabledProviders[0] || 'nvidia';
 				vscode.postMessage({ command: 'setProvider', value: currentProvider });
@@ -1613,6 +1731,27 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 		document.getElementById('bmcBtn').addEventListener('click', () => {
 			vscode.postMessage({ command: 'openExternal', url: 'https://www.buymeacoffee.com/martinalejandrooviedo' });
 		});
+		document.getElementById('keysBtn').addEventListener('click', () => {
+			togglePopup('keys');
+			loadApiKeys();
+		});
+		document.getElementById('keys-provider').addEventListener('change', () => {
+			loadApiKeys();
+		});
+		document.getElementById('keys-save').addEventListener('click', () => {
+			const provider = document.getElementById('keys-provider').value;
+			const text = document.getElementById('keys-textarea').value;
+			const keys = text.split(String.fromCharCode(10)).map((k) => k.trim()).filter((k) => k.length > 0);
+			const status = document.getElementById('keys-status');
+			status.textContent = 'Guardando...';
+			status.classList.add('show');
+			vscode.postMessage({ command: 'saveApiKeys', provider, keys });
+		});
+
+		function loadApiKeys() {
+			const provider = document.getElementById('keys-provider').value;
+			vscode.postMessage({ command: 'getApiKeys', provider });
+		}
 		document.getElementById('gearBtn').addEventListener('click', () => {
 			closeAllPopups();
 			vscode.postMessage({ command: 'openSettings' });
@@ -1677,6 +1816,12 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 		document.getElementById('provEnabledDeepseek').addEventListener('change', (e) => {
 			deepseekEnabled = e.target.checked;
 			vscode.postMessage({ command: 'setProviderEnabled', provider: 'deepseek', value: deepseekEnabled });
+			loadModels();
+		});
+
+		document.getElementById('provEnabledOrcarouter').addEventListener('change', (e) => {
+			orcarouterEnabled = e.target.checked;
+			vscode.postMessage({ command: 'setProviderEnabled', provider: 'orcarouter', value: orcarouterEnabled });
 			loadModels();
 		});
 
@@ -1806,9 +1951,11 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 				nvidiaEnabled = s.nvidiaEnabled !== false;
 				openrouterEnabled = s.openrouterEnabled !== false;
 				deepseekEnabled = s.deepseekEnabled !== false;
+				orcarouterEnabled = s.orcarouterEnabled !== false;
 				document.getElementById('provEnabledNvidia').checked = nvidiaEnabled;
 				document.getElementById('provEnabledOpenrouter').checked = openrouterEnabled;
 				document.getElementById('provEnabledDeepseek').checked = deepseekEnabled;
+				document.getElementById('provEnabledOrcarouter').checked = orcarouterEnabled;
 				document.querySelectorAll('.prov-btn').forEach((b) => {
 					if (b.dataset.prov === currentProvider) { b.classList.add('active'); }
 					else { b.classList.remove('active'); }
@@ -1882,6 +2029,15 @@ export class NvidiaViewProvider implements vscode.WebviewViewProvider {
 				setStreaming(false);
 			} else if (message.command === 'outputDir') {
 				document.getElementById('output-dir').textContent = message.dir;
+			} else if (message.command === 'apiKeys') {
+				document.getElementById('keys-textarea').value = (message.keys || []).join(String.fromCharCode(10));
+			} else if (message.command === 'apiKeysSaved') {
+				const status = document.getElementById('keys-status');
+				status.textContent = message.count > 0
+					? 'Guardadas ' + message.count + ' claves de ' + message.provider + '.'
+					: 'Claves de ' + message.provider + ' eliminadas.';
+				status.classList.add('show');
+				setTimeout(() => { status.classList.remove('show'); }, 2500);
 			}
 		});
 

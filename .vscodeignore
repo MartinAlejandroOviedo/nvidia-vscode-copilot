@@ -12,3 +12,8 @@ media/nvidia-icon.svg
 build/**
 releases/**
 release/**
+icon/**
+*.vsix
+*.ps1
+tmp-*
+package-lock.json
