@@ -95,6 +95,7 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 			download_file: "downloadFile",
 			git: "git",
 			write_file: "runCommand", // write_file uses runCommand permission
+			delete_file: "runCommand", // delete_file uses runCommand permission
 			web_search: "webSearch",
 		};
 		const permKey = toolPermissions[toolName];
@@ -152,7 +153,7 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 			function: {
 				name: "write_file",
 				description:
-					"Create or overwrite a file in the workspace with the given content. Path is relative to the workspace root.",
+					"Create or edit (overwrite) a file in the workspace with the given full content. Use this to create new files or update existing ones. Path is relative to the workspace root.",
 				parameters: {
 					type: "object",
 					properties: {
@@ -166,6 +167,24 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 						},
 					},
 					required: ["path", "content"],
+				},
+			},
+		},
+		{
+			type: "function",
+			function: {
+				name: "delete_file",
+				description:
+					"Delete a file in the workspace. Path is relative to the workspace root.",
+				parameters: {
+					type: "object",
+					properties: {
+						path: {
+							type: "string",
+							description: "Relative file path to delete, e.g. \"src/foo.py\".",
+						},
+					},
+					required: ["path"],
 				},
 			},
 		},
@@ -439,6 +458,27 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 					return `Error al escribir: ${err}`;
 				}
 			}
+			case "delete_file": {
+				const path = String(args.path ?? "");
+				const uri = this.resolveUri(path);
+				if (!this.autoApprove) {
+					const approve = await vscode.window.showWarningMessage(
+						`¿Permitir que NVIDIA Chat elimine el archivo "${path}"?`,
+						{ modal: true },
+						"Eliminar",
+						"Cancelar",
+					);
+					if (approve !== "Eliminar") {
+						return "Operación cancelada por el usuario.";
+					}
+				}
+				try {
+					await vscode.workspace.fs.delete(uri);
+					return `Archivo "${path}" eliminado correctamente.`;
+				} catch (err) {
+					return `Error al eliminar: ${err}`;
+				}
+			}
 			case "search_text": {
 				const query = String(args.query ?? "");
 				const root = vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -624,7 +664,7 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 
 	/** Check whether a parsed tool name corresponds to a known tool. */
 	private isKnownTool(name: string): boolean {
-		return ["list_files", "read_file", "write_file", "search_text", "run_command", "download_file", "git", "web_search"].includes(
+		return ["list_files", "read_file", "write_file", "delete_file", "search_text", "run_command", "download_file", "git", "web_search"].includes(
 			name,
 		);
 	}
@@ -751,19 +791,16 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 		return {
 			role: "system",
 			content:
-				"Eres un asistente que trabaja directamente sobre los archivos del proyecto del usuario. " +
-				`Tienes acceso completo al proyecto que está abierto en esta carpeta de trabajo: "${outputFolder}". ` +
-				"Puedes listar, leer, escribir y buscar en los archivos del proyecto usando las herramientas list_files, read_file, write_file y search_text. " +
-				"Todas las rutas relativas que uses en esas herramientas se resuelven dentro de esa carpeta de trabajo. " +
-				"IMPORTANTE: nunca digas que no puedes acceder al proyecto, a los archivos o al entorno del usuario. Sí puedes, usando las herramientas. " +
-				"Cuando el usuario pida revisar, leer, listar, crear o modificar algo del proyecto, ejecuta directamente la herramienta correspondiente (por ejemplo list_files o read_file para inspeccionarlo). " +
-				"Cuando el usuario pida crear o escribir un archivo, usa la herramienta write_file con un nombre de archivo razonable dentro de esa carpeta. " +
-				"Cuando el usuario pida descargar un archivo desde internet, usa la herramienta download_file con la URL y (opcionalmente) una ruta de destino. " +
-				"Cuando el usuario pida ejecutar un comando o un script, usa run_command; usa shell \"powershell\" para comandos o scripts de PowerShell y \"cmd\" para el símbolo del sistema. " +
-				"Cuando el usuario pida usar git (estado, commits, ramas, push, etc.), usa la herramienta git con los argumentos apropiados. " +
-				"IMPORTANTE: no describas la acción en texto ni digas que lo harás; ejecuta directamente la herramienta correspondiente. " +
-				"Después de recibir el resultado de una herramienta (por ejemplo web_search), responde directamente con la información obtenida y NO vuelvas a llamar a la misma herramienta ni encadenes más herramientas. " +
-				"Usa como máximo una o dos herramientas por respuesta. " +
+				`Eres un asistente de código que trabaja directamente sobre el proyecto del usuario. ` +
+				`La carpeta de trabajo es "${outputFolder}". Todas las rutas relativas que uses se resuelven dentro de esa carpeta. ` +
+				"Tienes acceso completo a los archivos del proyecto. Puedes: " +
+				"listar (list_files), leer (read_file), crear o editar archivos (write_file), borrar archivos (delete_file) y buscar texto (search_text). " +
+				"También puedes ejecutar comandos (run_command), usar git (git), descargar archivos (download_file) y, si está habilitada, buscar en internet (web_search). " +
+				"IMPORTANTE: no digas que no puedes acceder al workspace, a los archivos o que no tienes permisos de lectura, escritura, edición o borrado. Sí los tienes: usa la herramienta correspondiente directamente. " +
+				"Para crear o modificar un archivo usa write_file con el contenido completo. Para borrar usa delete_file. " +
+				"Para ejecutar un comando o script usa run_command (shell \"powershell\" para PowerShell, \"cmd\" para el símbolo del sistema). " +
+				"No describas la acción en texto: ejecuta la herramienta. " +
+				"Usa como máximo una o dos herramientas por respuesta y no encadenes la misma herramienta repetidamente. " +
 				"Responde en el mismo idioma que usa el usuario." +
 				snapshot,
 		};

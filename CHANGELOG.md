@@ -4,6 +4,16 @@ Todos los cambios notables de esta extensión se documentan en este archivo.
 
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el versionado sigue [SemVer](https://semver.org/lang/es/).
 
+## [1.0.4] - 2026-08-20
+
+### Añadido
+- Herramienta `delete_file` para borrar archivos del workspace.
+- Documentación de desarrollo en `docs/`.
+
+### Mejorado
+- Prompt de sistema más claro: carpeta de trabajo, capacidades y permisos explícitos (crear/editar/borrar).
+- Descripción de `write_file` aclara que sirve para crear o editar archivos.
+
 ## [1.0.3] - 2026-08-19
 
 ### Añadido

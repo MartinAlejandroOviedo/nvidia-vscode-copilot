@@ -2,7 +2,7 @@
 	"name": "nvidia-vscode-copilot",
 	"displayName": "NVIDIA Models for VS Code",
 	"description": "AI chat that works directly on your project: connect NVIDIA NIM, OpenRouter, DeepSeek and OrcaRouter models to read and write files, run commands, use Git, download files and search the web.",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"publisher": "MartinAlejandroOviedo",
 	"engines": {
 		"vscode": "^1.93.0"
