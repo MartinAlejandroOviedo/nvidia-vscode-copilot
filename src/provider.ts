@@ -9,13 +9,12 @@ const MODEL_ID_PREFIX = "vscode-nvidia/";
 const NVIDIA_API_BASE = "https://integrate.api.nvidia.com/v1";
 const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
-const ORCAROUTER_API_BASE = "https://api.orcarouter.ai/v1";
-const ORCAROUTER_MODELS_URL = "https://api.orcarouter.ai/v1/models";
 const DEFAULT_MODEL = "nvidia/llama-3.3-nemotron-super-49b-v1";
 const MAX_AGENT_ITERATIONS = 10;
 const MAX_HISTORY_MESSAGES = 20;
 const MAX_CONTEXT_CHARS = 4000;
 const DEEPSEEK_API_BASE = "https://api.deepseek.com/v1";
+const REQUEST_TIMEOUT_MS = 90000;
 
 interface ChatMessage {
 	role: string;
@@ -832,6 +831,10 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 		onReasoning?: () => void,
 	): AsyncGenerator<string> {
 		for (let iter = 0; iter < MAX_AGENT_ITERATIONS; iter++) {
+			if (signal?.aborted) {
+				throw new Error("aborted");
+			}
+			const requestSignal = this.requestSignal(signal);
 			const body: any = {
 				model: modelId,
 				messages: convo,
@@ -846,15 +849,21 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 				"debug",
 				`runAgentLoop iter=${iter}: modelo=${modelId}, mensajes=${convo.length}, herramientas=${(this.agentTools as any[]).length}`,
 			);
-			const stream = await this.createWithFallback(clients, body, signal);
+			const stream = await this.createWithFallback(clients, body, requestSignal);
+			this.log("debug", `runAgentLoop iter=${iter}: stream creado (headers recibidos)`);
 
 			let content = "";
 			let reasoningNotified = false;
 			let cleanYielded = 0;
+			let chunkCount = 0;
 			const toolCalls = new Map<number, ToolCallAccum>();
 
 			const iterable = stream as unknown as AsyncIterable<any>;
 			for await (const chunk of iterable) {
+				chunkCount++;
+				if (chunkCount === 1) {
+					this.log("debug", `runAgentLoop iter=${iter}: primer chunk recibido`);
+				}
 				const delta: any = chunk.choices?.[0]?.delta;
 				if (!delta) continue;
 				if (delta.reasoning || delta.reasoning_content) {
@@ -888,6 +897,17 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 					}
 				}
 			}
+
+			if (signal?.aborted) {
+				throw new Error("aborted");
+			}
+			if (requestSignal.aborted) {
+				throw new Error("timeout");
+			}
+			this.log(
+				"debug",
+				`runAgentLoop iter=${iter}: stream terminado, chunks=${chunkCount}, toolCalls=${toolCalls.size}, content=${content.length}`,
+			);
 
 			if (toolCalls.size === 0) {
 				// Strip <think> reasoning blocks (DeepSeek-R1 and similar).
@@ -1031,32 +1051,6 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 			.map((m) => m.id as string);
 	}
 
-	/** Get the list of OrcaRouter FREE models (id contains "free"). */
-	async getOrcaRouterFreeModels(): Promise<string[]> {
-		const apiKeys = await this.getOrcaRouterApiKeys();
-		if (apiKeys.length === 0) {
-			throw new Error(
-				"OrcaRouter API key no configurada. Abre la Configuración e ingresa tu clave.",
-			);
-		}
-		const resp = await fetch(ORCAROUTER_MODELS_URL, {
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${apiKeys[0]}`,
-			},
-		});
-		if (!resp.ok) {
-			throw new Error(`OrcaRouter models ${resp.status}: ${await resp.text()}`);
-		}
-		const data = (await resp.json()) as {
-			data?: Array<{ id?: string }>;
-		};
-		const models = data.data ?? [];
-		return models
-			.filter((m) => !!m.id && m.id.toLowerCase().includes("free"))
-			.map((m) => m.id as string);
-	}
-
 	/** Stream a chat completion against OpenRouter with agent tool-calling. */
 	async *streamOpenRouterChat(
 		messages: ChatMessage[],
@@ -1090,6 +1084,9 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 		try {
 			yield* this.runAgentLoop(clients, model, convo, signal, onTool, true, onReasoning);
 		} catch (err) {
+			if (signal?.aborted) {
+				throw new Error("aborted");
+			}
 			const msg = String(err);
 			if (
 				msg.includes("401") ||
@@ -1109,43 +1106,6 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 				this.log("error", `streamOpenRouterChat: ${String(err2)}`);
 				throw new Error(this.friendlyError(err2));
 			}
-		}
-	}
-
-	/** Stream a chat completion against OrcaRouter with agent tool-calling. */
-	async *streamOrcaRouterChat(
-		messages: ChatMessage[],
-		model: string,
-		signal?: AbortSignal,
-		onTool?: (name: string) => void,
-		onReasoning?: () => void,
-	): AsyncGenerator<string> {
-		const apiKeys = await this.getOrcaRouterApiKeys();
-		if (apiKeys.length === 0) {
-			throw new Error(
-				"OrcaRouter API key no configurada. Abre la Configuración e ingresa tu clave.",
-			);
-		}
-
-		const clients = apiKeys.map(
-			(key) =>
-				new OpenAI({
-					apiKey: key,
-					baseURL: ORCAROUTER_API_BASE,
-					timeout: 300000,
-				}),
-		);
-
-		const isReasoning =
-			model.toLowerCase().includes("reasoner") ||
-			model.toLowerCase().includes("reasoning");
-		const convo: any[] = [await this.buildSystemMessage(), ...this.trimHistory(messages)];
-		this.log("info", `streamOrcaRouterChat: modelo=${model}, mensajes=${messages.length}, claves=${clients.length}`);
-		try {
-			yield* this.runAgentLoop(clients, model, convo, signal, onTool, isReasoning, onReasoning);
-		} catch (err) {
-			this.log("error", `streamOrcaRouterChat: ${String(err)}`);
-			throw new Error(this.friendlyError(err));
 		}
 	}
 
@@ -1190,47 +1150,6 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 			.update("openrouterApiKey", key, vscode.ConfigurationTarget.Global);
 	}
 
-	private async getOrcaRouterApiKeys(): Promise<string[]> {
-		const keys: string[] = [];
-
-		const arr = vscode.workspace
-			.getConfiguration("nvidia")
-			.get<string[]>("orcarouterApiKeys");
-		if (Array.isArray(arr)) {
-			for (const k of arr) {
-				if (k && k.trim()) keys.push(k.trim());
-			}
-		}
-
-		let raw = await this.secrets.get("orcarouter.apiKey");
-		if (!raw) {
-			raw = vscode.workspace
-				.getConfiguration("nvidia")
-				.get<string>("orcarouterApiKey");
-		}
-		if (raw) {
-			for (const k of raw.split(/[\n,;]+/)) {
-				const t = k.trim();
-				if (t) keys.push(t);
-			}
-		}
-
-		return [...new Set(keys)];
-	}
-
-	private async getOrcaRouterApiKey(): Promise<string | undefined> {
-		const keys = await this.getOrcaRouterApiKeys();
-		return keys[0];
-	}
-
-	/** Store the OrcaRouter API key in VS Code secret storage. */
-	async setOrcaRouterApiKey(key: string): Promise<void> {
-		await this.secrets.store("orcarouter.apiKey", key);
-		await vscode.workspace
-			.getConfiguration("nvidia")
-			.update("orcarouterApiKey", key, vscode.ConfigurationTarget.Global);
-	}
-
 	/** Get the configured API keys for a provider. */
 	async getProviderApiKeys(provider: string): Promise<string[]> {
 		switch (provider) {
@@ -1238,8 +1157,6 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 				return this.getOpenRouterApiKeys();
 			case "deepseek":
 				return this.getDeepSeekApiKeys();
-			case "orcarouter":
-				return this.getOrcaRouterApiKeys();
 			default:
 				return this.getApiKeys();
 		}
@@ -1410,6 +1327,12 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 	private friendlyError(err: any): string {
 		const raw = String(err?.message ?? err ?? "");
 		const msg = raw.toLowerCase();
+		if (msg.includes("timeout") || msg.includes("timed out")) {
+			return (
+				"El modelo no respondió a tiempo. Puede estar saturado (especialmente los modelos gratuitos) " +
+				"o el prompt es demasiado grande. Volvé a intentar, o cambiá de modelo."
+			);
+		}
 		if (
 			msg.includes("resourceexhausted") ||
 			msg.includes("request limit") ||
@@ -1467,6 +1390,28 @@ export class NvidiaProvider implements vscode.LanguageModelChatProvider {
 			}
 		}
 		throw lastError;
+	}
+
+	/**
+	 * Combine the user's abort signal with a per-request timeout so a stalled
+	 * provider (headers sent but no body chunks) does not hang forever.
+	 */
+	private requestSignal(signal?: AbortSignal): AbortSignal {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+		const forward = () => controller.abort();
+		if (signal) {
+			signal.addEventListener("abort", forward, { once: true });
+		}
+		controller.signal.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(timer);
+				if (signal) signal.removeEventListener("abort", forward);
+			},
+			{ once: true },
+		);
+		return controller.signal;
 	}
 
 	/** Store the API key in VS Code secret storage. */

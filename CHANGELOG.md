@@ -7,26 +7,21 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 ## [1.0.4] - 2026-08-20
 
 ### Añadido
+- Gestor de **API Keys** en el panel (botón de llave): agregá, editá o quitá varias claves por proveedor para rotación automática, sin tocar la configuración de VS Code.
 - Herramienta `delete_file` para borrar archivos del workspace.
 - Documentación de desarrollo en `docs/`.
 
 ### Mejorado
+- Reconocimiento y limpieza de llamadas a herramientas en formato Anthropic (`<function_calls>`, `<invoke>`, `<parameter>`) en respuestas de DeepSeek V4.
 - Prompt de sistema más claro: carpeta de trabajo, capacidades y permisos explícitos (crear/editar/borrar).
 - Descripción de `write_file` aclara que sirve para crear o editar archivos.
-
-## [1.0.3] - 2026-08-19
-
-### Añadido
-- Proveedor **OrcaRouter** (OpenAI-compatible) con filtrado de modelos gratuitos (id contiene "free"), múltiples API keys y rotación automática.
-- Gestor de **API Keys** en el panel (botón de llave): agregá, editá o quitá varias claves por proveedor para rotación automática, sin tocar la configuración de VS Code.
-
-### Mejorado
-- Reconocimiento y limpieza de llamadas a herramientas en formato Anthropic (`<function_calls>`, `<invoke>`, `<parameter>`) en respuestas de DeepSeek V4.
 - Nuevo icono de la extensión.
+- Timeout por petición para no quedar colgado si el proveedor no responde.
 
 ### Corregido
 - La interfaz del panel no cargaba (iconos y handlers sin ejecutar) por secuencias de escape en el HTML del webview.
 - Icono faltante en el punto de extensión `views` (obligatorio en VS Code 1.134).
+- Botón de detener que no interrumpía la consulta.
 
 ## [1.0.2] - 2026-08-18
 
